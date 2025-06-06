@@ -18,7 +18,7 @@ This project is an interactive Streamlit web application for stock price predict
 
 ## Architecture
 
-![Stock Prediction Architecture](lstm-stock/architecture.png)
+![Stock Prediction Architecture](/assets/architecture.png)
 
 The system architecture follows a streamlined workflow:
 
