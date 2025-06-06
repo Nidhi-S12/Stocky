@@ -17,9 +17,6 @@ This project is an interactive Streamlit web application for stock price predict
 - **Simple, Fast Pipeline:** Designed for quick experimentation and educational use.
 
 ## Architecture
-
-![Stock Prediction Architecture](/assets/architecture.png)
-
 The system architecture follows a streamlined workflow:
 
 1. **Data Collection Layer**: Yahoo Finance API retrieves historical stock data
@@ -34,6 +31,8 @@ The LSTM model architecture consists of:
 - Dropout layer (0.2) for regularization
 - Dense layer with 32 units and ReLU activation
 - Output layer for price prediction
+
+| ![](/assets/architecture.png) 
 
 ## Project Structure
 
