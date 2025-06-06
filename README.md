@@ -32,7 +32,7 @@ The LSTM model architecture consists of:
 - Dense layer with 32 units and ReLU activation
 - Output layer for price prediction
 
-| ![](/assets/architecture.png) 
+![](/assets/architecture.png) 
 
 ## Project Structure
 
