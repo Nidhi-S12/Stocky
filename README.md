@@ -16,6 +16,25 @@ This project is an interactive Streamlit web application for stock price predict
 - **Downloadable Results:** Export predictions as CSV.
 - **Simple, Fast Pipeline:** Designed for quick experimentation and educational use.
 
+## Architecture
+
+![Stock Prediction Architecture](Diag.drawio%20(3).png.png)
+
+The system architecture follows a streamlined workflow:
+
+1. **Data Collection Layer**: Yahoo Finance API retrieves historical stock data
+2. **Preprocessing Layer**: Technical indicators are calculated and data is normalized
+3. **Model Layer**: LSTM neural network trained on prepared features
+4. **Prediction Layer**: Future price predictions with confidence intervals
+5. **Visualization Layer**: Interactive Streamlit UI displays results and insights
+
+The LSTM model architecture consists of:
+- Input layer with time-series features
+- LSTM layer with 64 units
+- Dropout layer (0.2) for regularization
+- Dense layer with 32 units and ReLU activation
+- Output layer for price prediction
+
 ## Project Structure
 
 ```
@@ -23,6 +42,8 @@ This project is an interactive Streamlit web application for stock price predict
 ├── main.py            # Streamlit app UI and workflow
 ├── model.py           # Feature engineering, model training, prediction, evaluation
 ├── requirements.txt   # Python dependencies
+├── assets/            # Diagrams and images
+│   └── architecture_diagram.png  # System architecture diagram
 └── README.md          # Project documentation
 ```
 
@@ -65,6 +86,7 @@ This project now features a streamlined LSTM-based stock prediction pipeline wit
 - The pipeline uses a simple LSTM model and a small set of technical indicators for speed and clarity.
 - For production or research, you can extend the feature set, tune hyperparameters, or add more advanced models.
 - The app is for educational and research purposes only.
+- Supports international stocks with appropriate currency display (USD, INR, EUR, etc.)
 
 ## Requirements
 
