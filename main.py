@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objs as go
+import plotly.express as px # Ensure this import is present
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from model import train_lstm_model, predict_future_prices, evaluate_model, detect_currency
@@ -9,6 +10,8 @@ import numpy as np
 import ssl
 import time
 import os
+import requests
+import feedparser
 
 # SSL configuration
 try:
@@ -16,11 +19,9 @@ try:
 except AttributeError:
     pass
 
-# Initialize session state for chart refresh and selected ticker
+# Initialize session state for chart refresh
 if 'refresh_charts' not in st.session_state:
     st.session_state.refresh_charts = False
-if 'selected_ticker' not in st.session_state:
-    st.session_state.selected_ticker = "AAPL"  # Default ticker
 
 st.set_page_config(
     page_title="AI Stock Predictor",
@@ -104,8 +105,7 @@ if nav == "Stock Prediction":
     def fetch_stock_data(ticker, start, end, max_retries=3):
         for attempt in range(max_retries):
             try:
-                stock = yf.Ticker(ticker)
-                data = stock.history(start=start, end=end, interval='1d', auto_adjust=False)
+                data = yf.Ticker(ticker).history(start=start, end=end, interval='1d', auto_adjust=False)
                 if not data.empty:
                     data.index = pd.to_datetime(data.index)
                     required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -114,9 +114,7 @@ if nav == "Stock Prediction":
                     for col in ['Open', 'High', 'Low']:
                         if data[col].isnull().all():
                             data[col] = data['Close']
-                    # Get stock info for currency detection
-                    stock_info = stock.info
-                    return data, stock_info
+                    return data
                 raise ValueError("Empty data returned")
             except Exception as e:
                 print(f"Attempt {attempt + 1} failed: {str(e)}")
@@ -133,9 +131,12 @@ if nav == "Stock Prediction":
         try:
             status_text.text("📥 Fetching stock data...")
             progress_bar.progress(20)
-            stock_data, stock_info = fetch_stock_data(ticker_input, start_date, end_date)
+            stock_data = fetch_stock_data(ticker_input, start_date, end_date)
             
-            # Detect currency
+            # Get stock info for currency detection
+            stock_info = yf.Ticker(ticker_input).info
+            
+            # Detect currency for the ticker
             currency_code, currency_symbol = detect_currency(ticker_input, stock_info)
             
             if stock_data is None or stock_data.empty:
@@ -218,7 +219,7 @@ if nav == "Stock Prediction":
                             x=stock_data.index,
                             y=stock_data['20_MA'],
                             mode='lines',
-                            name='20-day MA',
+                            name='20-Day MA',
                             line=dict(color='orange', dash='dot'),
                             opacity=0.7
                         ),
@@ -246,7 +247,7 @@ if nav == "Stock Prediction":
                             y=np.concatenate([upper_bound, lower_bound[::-1]]),
                             fill='toself',
                             fillcolor='rgba(255,0,0,0.1)',
-                            line=dict(color='rgba(255,0,0,0)'),
+                            line=dict(color='rgba(255,255,255,0)'),
                             name='Confidence Interval',
                             showlegend=True
                         ),
@@ -266,7 +267,7 @@ if nav == "Stock Prediction":
                     height=700,
                     title=f"{ticker_input} Stock Analysis & Prediction",
                     xaxis_title="Date",
-                    yaxis_title=f"Price ({currency_symbol})",
+                    yaxis_title=f"Price ({currency_code})",  # Update y-axis title with currency
                     yaxis2_title="Volume",
                     hovermode='x unified',
                     legend=dict(x=0, y=1),
@@ -278,8 +279,8 @@ if nav == "Stock Prediction":
             with col2:
                 st.subheader("📈 Model Performance")
                 st.table({
-                    "MAE": [f"{float(mae):.2f}"],
-                    "RMSE": [f"{float(rmse):.2f}"],
+                    f"MAE ({currency_symbol})": [f"{float(mae):.2f}"],
+                    f"RMSE ({currency_symbol})": [f"{float(rmse):.2f}"],
                     "MAPE (%)": [f"{float(mape):.2f}"],
                     "R²": [f"{float(r2):.3f}"]
                 })
@@ -401,7 +402,7 @@ if nav == "Stock Prediction":
             """)
 
 elif nav == "Stock Lookup":
-    st.markdown('<h1 class="main-header">🔍️ Stock Information Center</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🔍 Stock Information Center</h1>', unsafe_allow_html=True)
     st.markdown("""
     <div style="text-align: center; margin-bottom: 2rem;">
         <p style="font-size: 1.2rem; color: #666;">
@@ -413,276 +414,310 @@ elif nav == "Stock Lookup":
     # Enhanced lookup form with better styling
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        # Initialize text input with session state value
         lookup_ticker = st.text_input(
             "🔍 Enter Stock Ticker Symbol",
-            value=st.session_state.selected_ticker,
-            key="lookup_ticker_input",
+            value="AAPL",
+            key="lookup_ticker",
             placeholder="e.g., AAPL, GOOGL, TSLA",
             help="Enter a valid stock ticker symbol"
         ).upper().strip()
         
-        lookup_button = st.button("📊 Get Stock Information", type="primary", key="lookup_button", use_container_width=True)
-    
-    # Cache-clearing button for debugging
-    if st.button("Clear Cache and Refresh", key="clear_cache"):
-        st.cache_data.clear()
-        st.rerun()
-    
-    if lookup_button and lookup_ticker:
-        # Update selected ticker when lookup is performed
-        st.session_state.selected_ticker = lookup_ticker
-        with st.spinner(f"Fetching information for {lookup_ticker}..."):
-            try:
-                # Fetch stock info
-                stock = yf.Ticker(lookup_ticker)
-                info = stock.info
-                
-                # Detect currency for this stock
-                currency_code, currency_symbol = detect_currency(lookup_ticker, info)
-                
-                # Validate if we got valid data
-                if not info or (info.get('symbol') and info.get('symbol') != lookup_ticker and not lookup_ticker.endswith(('.NS', '.BO'))):
-                    st.error(f"❌ Could not find valid data for '{lookup_ticker}'. Please check the ticker symbol.")
-                    st.stop()
-                
-                st.success(f"✅ Successfully loaded data for {info.get('longName', lookup_ticker)}")
-                
-                # Display basic information
-                st.subheader("📊 Key Metrics")
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    current_price = info.get('currentPrice') or info.get('regularMarketPrice')
-                    previous_close = info.get('previousClose') or info.get('regularMarketPreviousClose')
-                    market_cap = info.get('marketCap')
+        lookup_button = st.button("📊 Get Stock Information", type="primary", use_container_width=True)
+    if lookup_button:
+        if lookup_ticker:
+            with st.spinner(f"Fetching information for {lookup_ticker}..."):
+                try:
+                    # Fetch stock info
+                    stock = yf.Ticker(lookup_ticker)
+                    info = stock.info
                     
-                    if current_price:
-                        price_change = current_price - previous_close if previous_close else 0
-                        price_change_pct = (price_change / previous_close * 100) if previous_close else 0
-                        st.metric("Current Price", f"{currency_symbol}{current_price:.2f}", 
-                                 delta=f"{price_change_pct:+.2f}%" if price_change_pct else None)
-                    else:
-                        st.metric("Current Price", "N/A")
-                        
-                    st.metric("Previous Close", f"{currency_symbol}{previous_close:.2f}" if previous_close else "N/A")
-                    if market_cap:
-                        if currency_code == 'INR':
-                            market_cap_display = f"₹{market_cap/10000000:.2f} Cr" if market_cap > 10000000 else f"₹{market_cap:,.0f}"
-                        else:
-                            market_cap_display = f"{currency_symbol}{market_cap:,.0f}"
-                        st.metric("Market Cap", market_cap_display)
-                    else:
-                        st.metric("Market Cap", "N/A")
-                
-                with col2:
-                    week_high = info.get('fiftyTwoWeekHigh')
-                    week_low = info.get('fiftyTwoWeekLow')
-                    volume = info.get('volume') or info.get('regularMarketVolume')
+                    # Validate if we got valid data
+                    if not info or info.get('symbol') != lookup_ticker:
+                        st.error(f"❌ Could not find valid data for '{lookup_ticker}'. Please check the ticker symbol.")
+                        st.stop()
                     
-                    st.metric("52 Week High", f"{currency_symbol}{week_high:.2f}" if week_high else "N/A")
-                    st.metric("52 Week Low", f"{currency_symbol}{week_low:.2f}" if week_low else "N/A")
-                    st.metric("Volume", f"{volume:,}" if volume else "N/A")
-                
-                with col3:
-                    pe_ratio = info.get('trailingPE')
-                    dividend_yield = info.get('dividendYield')
-                    beta = info.get('beta')
+                    # Detect currency for the ticker
+                    currency_code, currency_symbol = detect_currency(lookup_ticker, info)
                     
-                    st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
-                    st.metric("Dividend Yield", f"{dividend_yield*100:.2f}%" if dividend_yield else "N/A")
-                    st.metric("Beta", f"{beta:.2f}" if beta else "N/A")
-            
-                # Company Information
-                with st.expander("📋 Company Information", expanded=True):
-                    st.write(f"**Company Name:** {info.get('longName', 'N/A')}")
-                    st.write(f"**Sector:** {info.get('sector', 'N/A')}")
-                    st.write(f"**Industry:** {info.get('industry', 'N/A')}")
-                    st.write(f"**Country:** {info.get('country', 'N/A')}")
-                    website = info.get('website')
-                    if website:
-                        st.write(f"**Website:** [{website}]({website})")
-                    else:
-                        st.write("**Website:** N/A")
+                    st.success(f"✅ Successfully loaded data for {info.get('longName', lookup_ticker)}")
                     
-                    summary = info.get('longBusinessSummary')
-                    if summary:
-                        st.write(f"**Description:** {summary[:500]}..." if len(summary) > 500 else f"**Description:** {summary}")
-                    else:
-                        st.write("**Description:** N/A")
-            
-                # Financial Metrics
-                with st.expander("💰 Financial Metrics"):
-                    fin_col1, fin_col2 = st.columns(2)
+                    # Display basic information
+                    st.subheader("📊 Key Metrics")
+                    col1, col2, col3 = st.columns(3)
                     
-                    with fin_col1:
-                        st.write("**Valuation Metrics:**")
+                    with col1:
+                        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                        previous_close = info.get('previousClose') or info.get('regularMarketPreviousClose')
                         market_cap = info.get('marketCap')
-                        enterprise_value = info.get('enterpriseValue')
-                        price_to_book = info.get('priceToBook')
-                        price_to_sales = info.get('priceToSalesTrailing12Months')
                         
-                        st.write(f"• Market Cap: {currency_symbol}{market_cap:,.0f}" if market_cap else "• Market Cap: N/A")
-                        st.write(f"• Enterprise Value: {currency_symbol}{enterprise_value:,.0f}" if enterprise_value else "• Enterprise Value: N/A")
-                        st.write(f"• Price to Book: {price_to_book:.2f}" if price_to_book else "• Price to Book: N/A")
-                        st.write(f"• Price to Sales: {price_to_sales:.2f}" if price_to_sales else "• Price to Sales: N/A")
+                        if current_price:
+                            price_change = current_price - previous_close if previous_close else 0
+                            price_change_pct = (price_change / previous_close * 100) if previous_close else 0
+                            st.metric("Current Price", f"{currency_symbol}{current_price:.2f}", 
+                                     delta=f"{price_change_pct:+.2f}%" if price_change_pct else None)
+                        else:
+                            st.metric("Current Price", "N/A")
+                            
+                        st.metric("Previous Close", f"{currency_symbol}{previous_close:.2f}" if previous_close else "N/A")
+                        st.metric("Market Cap", f"{currency_symbol}{market_cap:,.0f}" if market_cap else "N/A")
                     
-                    with fin_col2:
-                        st.write("**Profitability:**")
-                        profit_margin = info.get('profitMargins')
-                        operating_margin = info.get('operatingMargins')
-                        roa = info.get('returnOnAssets')
-                        roe = info.get('returnOnEquity')
+                    with col2:
+                        week_high = info.get('fiftyTwoWeekHigh')
+                        week_low = info.get('fiftyTwoWeekLow')
+                        volume = info.get('volume') or info.get('regularMarketVolume')
                         
-                        st.write(f"• Profit Margin: {profit_margin*100:.2f}%" if profit_margin else "• Profit Margin: N/A")
-                        st.write(f"• Operating Margin: {operating_margin*100:.2f}%" if operating_margin else "• Operating Margin: N/A")
-                        st.write(f"• Return on Assets: {roa*100:.2f}%" if roa else "• Return on Assets: N/A")
-                        st.write(f"• Return on Equity: {roe*100:.2f}%" if roe else "• Return on Equity: N/A")
-            
-                # Recent Performance Chart
-                with st.expander("📈 Recent Price Chart", expanded=True):
-                    # Get 1 year of data for chart
-                    hist_data = stock.history(period="1y")
-                    if not hist_data.empty:
-                        # Create a more detailed chart with candlesticks
-                        from plotly.subplots import make_subplots
-                        chart_fig = go.Figure()
+                        st.metric("52 Week High", f"{currency_symbol}{week_high:.2f}" if week_high else "N/A")
+                        st.metric("52 Week Low", f"{currency_symbol}{week_low:.2f}" if week_low else "N/A")
+                        st.metric("Volume", f"{volume:,}" if volume else "N/A")
+                    
+                    with col3:
+                        pe_ratio = info.get('trailingPE')
+                        dividend_yield = info.get('dividendYield')
+                        beta = info.get('beta')
                         
-                        # Add candlestick chart
-                        chart_fig.add_trace(go.Candlestick(
-                            x=hist_data.index,
-                            open=hist_data['Open'],
-                            high=hist_data['High'],
-                            low=hist_data['Low'],
-                            close=hist_data['Close'],
-                            name="Price"
-                        ))
+                        st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
+                        st.metric("Dividend Yield", f"{dividend_yield}%" if dividend_yield else "N/A")   
+                        st.metric("Beta", f"{beta:.2f}" if beta else "N/A")
+                
+                    # Company Information
+                    with st.expander("📋 Company Information", expanded=True):
+                        st.write(f"**Company Name:** {info.get('longName', 'N/A')}")
+                        st.write(f"**Sector:** {info.get('sector', 'N/A')}")
+                        st.write(f"**Industry:** {info.get('industry', 'N/A')}")
+                        st.write(f"**Country:** {info.get('country', 'N/A')}")
+                        website = info.get('website')
+                        if website:
+                            st.write(f"**Website:** [{website}]({website})")
+                        else:
+                            st.write("**Website:** N/A")
                         
-                        # Add moving averages
-                        ma_20 = hist_data['Close'].rolling(window=20).mean()
-                        ma_50 = hist_data['Close'].rolling(window=50).mean()
+                        summary = info.get('longBusinessSummary')
+                        if summary:
+                            st.write(f"**Description:** {summary[:500]}..." if len(summary) > 500 else f"**Description:** {summary}")
+                        else:
+                            st.write("**Description:** N/A")
+                
+                    # Financial Metrics
+                    with st.expander("💰 Financial Metrics"):
+                        fin_col1, fin_col2 = st.columns(2)
                         
-                        chart_fig.add_trace(go.Scatter(
-                            x=hist_data.index,
-                            y=ma_20,
-                            mode='lines',
-                            name='20-day MA',
-                            line=dict(color='orange', width=1)
-                        ))
+                        with fin_col1:
+                            st.write("**Valuation Metrics:**")
+                            market_cap = info.get('marketCap')
+                            enterprise_value = info.get('enterpriseValue')
+                            price_to_book = info.get('priceToBook')
+                            price_to_sales = info.get('priceToSalesTrailing12Months')
+                            
+                            st.write(f"• Market Cap: {currency_symbol}{market_cap:,.0f}" if market_cap else "• Market Cap: N/A")
+                            st.write(f"• Enterprise Value: {currency_symbol}{enterprise_value:,.0f}" if enterprise_value else "• Enterprise Value: N/A")
+                            st.write(f"• Price to Book: {price_to_book:.2f}" if price_to_book else "• Price to Book: N/A")
+                            st.write(f"• Price to Sales: {price_to_sales:.2f}" if price_to_sales else "• Price to Sales: N/A")
                         
-                        chart_fig.add_trace(go.Scatter(
-                            x=hist_data.index,
-                            y=ma_50,
-                            mode='lines',
-                            name='50-day MA',
-                            line=dict(color='red', width=1)
-                        ))
-                        
-                        chart_fig.update_layout(
-                            title=f"{lookup_ticker} - 1 Year Price Chart",
-                            xaxis_title="Date",
-                            yaxis_title=f"Price ({currency_symbol})",
-                            template="plotly_white",
-                            height=500,
-                            xaxis_rangeslider_visible=False
+                        with fin_col2:
+                            st.write("**Profitability:**")
+                            profit_margin = info.get('profitMargins')
+                            operating_margin = info.get('operatingMargins')
+                            roa = info.get('returnOnAssets')
+                            roe = info.get('returnOnEquity')
+                            
+                            st.write(f"• Profit Margin: {profit_margin*100:.2f}%" if profit_margin else "• Profit Margin: N/A")
+                            st.write(f"• Operating Margin: {operating_margin*100:.2f}%" if operating_margin else "• Operating Margin: N/A")
+                            st.write(f"• Return on Assets: {roa*100:.2f}%" if roa else "• Return on Assets: N/A")
+                            st.write(f"• Return on Equity: {roe*100:.2f}%" if roe else "• Return on Equity: N/A")
+                
+                    # Recent Performance Chart
+                    with st.expander("📈 Recent Price Chart", expanded=True):
+                        # Get 1 year of data for chart
+                        hist_data = stock.history(period="1y")
+                        if not hist_data.empty:
+                            # Create a more detailed chart with candlesticks
+                            from plotly.subplots import make_subplots
+                            chart_fig = go.Figure()
+                            
+                            # Add candlestick chart
+                            chart_fig.add_trace(go.Candlestick(
+                                x=hist_data.index,
+                                open=hist_data['Open'],
+                                high=hist_data['High'],
+                                low=hist_data['Low'],
+                                close=hist_data['Close'],
+                                name="Price"
+                            ))
+                            
+                            # Add moving averages
+                            ma_20 = hist_data['Close'].rolling(window=20).mean()
+                            ma_50 = hist_data['Close'].rolling(window=50).mean()
+                            
+                            chart_fig.add_trace(go.Scatter(
+                                x=hist_data.index,
+                                y=ma_20,
+                                mode='lines',
+                                name='20-day MA',
+                                line=dict(color='orange', width=1)
+                            ))
+                            
+                            chart_fig.add_trace(go.Scatter(
+                                x=hist_data.index,
+                                y=ma_50,
+                                mode='lines',
+                                name='50-day MA',
+                                line=dict(color='red', width=1)
+                            ))
+                            
+                            chart_fig.update_layout(
+                                title=f"{lookup_ticker} - 1 Year Price Chart",
+                                xaxis_title="Date",
+                                yaxis_title=f"Price ({currency_code})",  # Update y-axis title with currency
+                                template="plotly_white",
+                                height=500,
+                                xaxis_rangeslider_visible=False
+                            )
+                            st.plotly_chart(chart_fig, use_container_width=True)
+                        else:
+                            st.warning("No historical data available for chart.")
+                
+                    # News (via Yahoo Finance RSS)
+                    with st.expander("📰 Recent News"):
+                        feed_url = (
+                            f"https://feeds.finance.yahoo.com/rss/2.0/headline"
+                            f"?s={lookup_ticker}&region=US&lang=en-US"
                         )
-                        st.plotly_chart(chart_fig, use_container_width=True)
-                    else:
-                        st.warning("No historical data available for chart.")
-            
-                # News (if available)
-                with st.expander("📰 Recent News", expanded=True):
-                    with st.spinner("Fetching news..."):
                         try:
-                            news = None
-                            # Retry up to 3 times for transient network issues
-                            for attempt in range(3):
-                                try:
-                                    news = stock.news
-                                    break
-                                except Exception as e:
-                                    if attempt < 2:
-                                        time.sleep(1)  # Wait 1 second before retrying
-                                        continue
-                                    raise e
-                            # Log news data to console for debugging
-                            print(f"News data for {lookup_ticker}: {news}")
-                            if news and isinstance(news, list) and len(news) > 0:
-                                displayed_articles = 0
-                                for i, article in enumerate(news[:5], 1):  # Try up to 5 articles
-                                    try:
-                                        # Access nested properties safely
-                                        content = article.get('content') or {}
-                                        title = content.get('title', 'N/A')
-                                        publisher = content.get('provider', {}).get('displayName', 'N/A')
-                                        pub_date = content.get('pubDate')
-                                        # Get link safely
-                                        click_url = content.get('clickThroughUrl')
-                                        canon_url = content.get('canonicalUrl')
-                                        link = None
-                                        if click_url and isinstance(click_url, dict):
-                                            link = click_url.get('url')
-                                        elif canon_url and isinstance(canon_url, dict):
-                                            link = canon_url.get('url')
-                                        # Skip articles with no valid link
-                                        if not title or title == 'N/A' or not publisher or not link:
-                                            continue
-                                        with st.container():
+                            with st.spinner(f"Fetching news for {lookup_ticker}..."):
+                                feed = feedparser.parse(feed_url)
+                                entries = feed.entries or []
+                            
+                            if entries:
+                                st.subheader(f"Latest {len(entries)} Articles for {info.get('longName', lookup_ticker)}")
+                                for i, entry in enumerate(entries, 1):
+                                    with st.container():
+                                        col1, col2 = st.columns([4, 1])
+                                        with col1:
+                                            title = entry.get("title", "N/A")
                                             st.markdown(f"**{i}. {title}**")
-                                            col1, col2 = st.columns([3, 1])
-                                            with col1:
-                                                st.markdown(f"*Source: {publisher}*")
-                                                if pub_date:
-                                                    try:
-                                                        article_date = datetime.strptime(pub_date, '%Y-%m-%dT%H:%M:%SZ').strftime('%Y-%m-%d')
-                                                        st.markdown(f"*Date: {article_date}*")
-                                                    except ValueError:
-                                                        st.markdown(f"*Date: {pub_date}*")
+                                            
+                                            published_date = entry.get("published", "No date available")
+                                            # Attempt to parse and reformat date for consistency
+                                            try:
+                                                dt_obj = datetime.strptime(published_date, "%a, %d %b %Y %H:%M:%S %Z")
+                                                formatted_date = dt_obj.strftime("%B %d, %Y %H:%M %Z")
+                                            except ValueError:
+                                                formatted_date = published_date # Keep original if parsing fails
+                                            
+                                            st.caption(f"Published: {formatted_date}")
+
+                                        link = entry.get("link", "")
+                                        if link:
                                             with col2:
-                                                st.link_button("Read Full Article", link)
-                                            st.divider()
-                                        displayed_articles += 1
-                                    except Exception as article_error:
-                                        print(f"Skipping article {i} due to error: {str(article_error)}")
-                                        continue
-                                if displayed_articles == 0:
-                                    st.info(f"No valid news articles available for {lookup_ticker}. Try a major US stock like AAPL or MSFT for better news coverage.")
+                                                st.link_button("Read Article ↗️", link, use_container_width=True)
+                                        
+                                        summary = entry.get("summary", "")
+                                        if summary:
+                                            # Basic HTML tag removal for cleaner summary
+                                            import re
+                                            clean_summary = re.sub('<[^<]+?>', '', summary)
+                                            st.markdown(f"<small>{clean_summary[:300]}{'...' if len(clean_summary) > 300 else ''}</small>", unsafe_allow_html=True)
+                                        
+                                        # Check for media content (thumbnails)
+                                        if 'media_content' in entry and entry.media_content:
+                                            for media in entry.media_content:
+                                                if 'url' in media:
+                                                    st.image(media['url'], width=150)
+                                                    break # Show first image
+                                        elif 'media_thumbnail' in entry and entry.media_thumbnail:
+                                             for thumbnail in entry.media_thumbnail:
+                                                if 'url' in thumbnail:
+                                                    st.image(thumbnail['url'], width=150)
+                                                    break # Show first image
+                                        
+                                        st.divider()
                             else:
-                                st.info(f"No recent news available for {lookup_ticker}. Try a different ticker (e.g., AAPL, MSFT).")
-                        except Exception as news_error:
-                            st.error(f"Error fetching news for {lookup_ticker}: {str(news_error)}")
-                            st.info("Please try again or use a different ticker (e.g., AAPL, MSFT).")
-            
-                # Institutional Holdings
-                with st.expander("🏛️ Institutional Holdings"):
-                    try:
-                        institutional_holders = stock.institutional_holders
-                        if institutional_holders is not None and not institutional_holders.empty:
-                            st.dataframe(institutional_holders.head(10), use_container_width=True)
-                        else:
+                                st.info(f"No recent RSS news found for {lookup_ticker}.")
+                        except Exception as e:
+                            st.error(f"Could not fetch or parse news feed: {e}")
+                
+                    # Institutional Holdings
+                    with st.expander("🏛️ Institutional Holdings"):
+                        try:
+                            institutional_holders = stock.institutional_holders
+                            if institutional_holders is not None and not institutional_holders.empty:
+                                st.dataframe(institutional_holders.head(10), use_container_width=True)
+                            else:
+                                st.info("Institutional holdings data unavailable")
+                        except Exception:
                             st.info("Institutional holdings data unavailable")
-                    except Exception:
-                        st.info("Institutional holdings data unavailable")
-            
-                # Recommendations
-                with st.expander("🎯 Analyst Recommendations"):
-                    try:
-                        recommendations = stock.recommendations
-                        if recommendations is not None and not recommendations.empty:
-                            st.dataframe(recommendations.tail(10), use_container_width=True)
-                        else:
-                            st.info("Analyst recommendations unavailable")
-                    except Exception:
-                        st.info("Analyst recommendations unavailable")
-            
-            except Exception as e:
-                st.error(f"❌ Error fetching data for {lookup_ticker}: {str(e)}")
-                st.info("💡 **Tips:**\n"
-                       "• Make sure the ticker symbol is correct\n"
-                       "• Try a different symbol\n"
-                       "• Check your internet connection")
-    elif lookup_button:
-        st.warning("⚠️ Please enter a stock ticker symbol to continue.")
+                    
+                    # Earnings & Estimates
+                    with st.expander("📅 Earnings & Estimates"):
+                        try:
+                            # Yahoo API call
+                            url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{lookup_ticker}"
+                            params = {"modules": "calendarEvents,earningsHistory"}
+                            headers = {"User-Agent": "Mozilla/5.0"}
+                            resp = requests.get(url, params=params, headers=headers, timeout=5)
+                            data = {}
+                            if resp.ok and resp.text.strip():
+                                try:
+                                    data = resp.json().get("quoteSummary", {}).get("result", [{}])[0] or {}
+                                except ValueError:
+                                    data = {}
+
+                            # Next earnings date
+                            earnings_cal = (data.get("calendarEvents") or {}).get("earnings") or {}
+                            dates = earnings_cal.get("earningsDate") or []
+                            next_date = None
+                            if dates and isinstance(dates[0], dict):
+                                next_date = dates[0].get("fmt")
+                            if not next_date:
+                                info_date = stock.info.get("earningsDate") or stock.info.get("earningsTimestamp")
+                                if isinstance(info_date, (list, tuple)) and info_date:
+                                    next_date = info_date[0]
+                                elif isinstance(info_date, (int, float)):
+                                    next_date = datetime.fromtimestamp(info_date).strftime("%Y-%m-%d")
+                            if next_date:
+                                st.metric("Next Earnings Date", next_date)
+                            else:
+                                st.info("No upcoming earnings date available.")
+
+                            # Historical earnings via API
+                            hist = (data.get("earningsHistory") or {}).get("history") or []
+                            if hist:
+                                df_e = pd.DataFrame([{
+                                    "date": pd.to_datetime(item["earningsDate"]["fmt"]).date(),
+                                    "actual": item["actual"]["raw"],
+                                    "estimate": item["estimate"]["raw"]
+                                } for item in hist])
+                                st.subheader("Historical Earnings (API)")
+                                st.dataframe(df_e, use_container_width=True)
+                                fig_e = px.bar(df_e, x="date", y="actual",
+                                               title="Earnings Actual (API)",
+                                               labels={"actual":"Actual EPS","date":"Date"})
+                                st.plotly_chart(fig_e, use_container_width=True)
+                            else:
+                                # fallback to yfinance earnings DataFrame
+                                df_ann = getattr(stock, "earnings", None)
+                                if isinstance(df_ann, pd.DataFrame) and not df_ann.empty:
+                                    st.subheader("Historical Earnings (yfinance)")
+                                    st.dataframe(df_ann.tail(8), use_container_width=True)
+                                    fig_y = px.bar(
+                                        df_ann.reset_index().rename(columns={'index':'Year','Earnings':'Earnings'}),
+                                        x="Year", y="Earnings",
+                                        title="Annual Earnings (yfinance)"
+                                    )
+                                    st.plotly_chart(fig_y, use_container_width=True)
+                                else:
+                                    st.info("No historical earnings data available.")
+                        except Exception as e:
+                            st.error(f"Error fetching earnings data: {e}")
+                
+                except Exception as e:
+                    st.error(f"❌ Error fetching data for {lookup_ticker}: {str(e)}")
+                    st.info("💡 **Tips:**\n"
+                           "• Make sure the ticker symbol is correct\n"
+                           "• Try a different symbol\n"
+                           "• Check your internet connection")
+        else:
+            st.warning("⚠️ Please enter a stock ticker symbol to continue.")
     
     # Quick lookup buttons for popular stocks
     st.divider()
@@ -694,6 +729,5 @@ elif nav == "Stock Lookup":
     for i, stock in enumerate(popular_stocks):
         with cols[i % 4]:
             if st.button(stock, key=f"popular_{stock}"):
-                print(f"Popular stock clicked: {stock}")  # Backend debug
-                st.session_state.selected_ticker = stock
+                st.session_state.lookup_ticker = stock
                 st.rerun()

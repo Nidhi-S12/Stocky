@@ -26,3 +26,6 @@ xgboost==1.7.6
 transformers==4.40.2
 torch>=2.0.0
 pandas_ta
+fastapi==0.115.2
+uvicorn==0.32.0
+feedparser
